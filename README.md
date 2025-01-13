@@ -2,6 +2,7 @@
 
 This repository contains the training code and experiment results for the paper [OpenDiLoCo: An Open-Source Framework for Globally Distributed Low-Communication Training](https://arxiv.org/abs/2407.07852).
 
+> **Important Notice**: OpenDiLoCo is no longer maintained. For our production-ready distributed training solution, please check out [prime](https://github.com/PrimeIntellect-ai/prime), which offers improved fault tolerance, bandwidth utilization, and scalability.
 
 https://github.com/user-attachments/assets/38caf4cc-51e1-4ee6-8f43-406910a35995
 
