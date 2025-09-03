@@ -268,11 +268,3 @@ pkill -f torchrun
 # Stop DHT
 pkill -f hivemind-dht
 ```
-
-## Next Steps
-
-After mastering both torch.distributed and Hivemind, explore:
-- Real dataset training
-- Model checkpointing and resuming
-- Advanced FSDP configurations
-- Production multi-cluster deployments
