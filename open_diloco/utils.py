@@ -1,13 +1,16 @@
 import hashlib
 from functools import partial
 import pickle
-from typing import Any, Generator, Protocol
+from typing import Any, Generator, Protocol, Dict, Tuple, Union, List
 
 import torch
 from torch.utils.hooks import RemovableHandle
 from torch.distributed.fsdp import ShardingStrategy
 from torch.utils.data import IterableDataset
-import wandb
+try:
+    import wandb  # type: ignore
+except Exception:
+    wandb = None  # type: ignore
 
 
 _WRAPPED_NAME_TO_REMOVE = ["_forward_module.", "_fsdp_wrapped_module.", "_orig_mod."]
@@ -25,10 +28,10 @@ def _remove_fsdp_prefix(name: str) -> str:
 def log_activations_hook(
     _mod: torch.nn.Module,
     _inp: torch.Tensor,
-    outp: torch.Tensor | tuple[torch.Tensor, ...],
+    outp: Union[torch.Tensor, Tuple[torch.Tensor, ...]],
     mod_name: str,
     gradient_accumulation_steps: int,
-    log_activations: dict[str, float],
+    log_activations: Dict[str, float],
 ) -> None:
     if isinstance(outp, tuple):
         outp = outp[0]
@@ -42,10 +45,10 @@ def log_activations_hook(
 
 def register_metrics_hooks(
     model: torch.nn.Module,
-    target_layers: list[str],
-    log_activations: dict[str, torch.Tensor],
+    target_layers: List[str],
+    log_activations: Dict[str, torch.Tensor],
     gradient_accumulation_steps: int,
-) -> list[RemovableHandle]:
+) -> List[RemovableHandle]:
     """
     this function take a torch   module, a list of layer name and apply a hook function that
     monitor the output norm of the layers.
@@ -80,7 +83,7 @@ def hash_tensor_content(a: torch.Tensor, max_size: int = 1000) -> str:
     return hashlib.md5(_round_flatten(a, max_size=max_size).encode("utf-8")).hexdigest()
 
 
-def get_compression_kwargs(hivemind_compression: str | None) -> dict:
+def get_compression_kwargs(hivemind_compression: Union[str, None]) -> dict:
     """Return the compression kwargs for hivemind optimizer based on the hivemind_compression argument."""
     ret_kwargs = {}
 
@@ -160,7 +163,7 @@ class FakeTokenizedDataset(IterableDataset):
         self.vocab_size = vocab_size
         assert vocab_size > 3, "Vocab size must be greater than 3"
 
-    def __iter__(self) -> Generator[dict[str, Any], Any, None]:
+    def __iter__(self) -> Generator[Dict[str, Any], Any, None]:
         while True:
             input_ids = torch.randint(3, self.vocab_size, (self.seq_len,)).tolist()
             attention_mask = [1] * self.seq_len
@@ -170,22 +173,24 @@ class FakeTokenizedDataset(IterableDataset):
 class Logger(Protocol):
     def __init__(self, project, config): ...
 
-    def log(self, metrics: dict[str, Any]): ...
+    def log(self, metrics: Dict[str, Any]): ...
 
     def finish(self): ...
 
 
 class WandbLogger:
     def __init__(self, project, config, resume: bool):
-        wandb.init(
-            project=project, config=config, resume="auto" if resume else None
-        )  # make wandb reuse the same run id if possible
+        if wandb is None:
+            raise RuntimeError("wandb is not available in the current environment")
+        wandb.init(project=project, config=config, resume="auto" if resume else None)
 
-    def log(self, metrics: dict[str, Any]):
-        wandb.log(metrics)
+    def log(self, metrics: Dict[str, Any]):
+        if wandb is not None:
+            wandb.log(metrics)
 
     def finish(self):
-        wandb.finish()
+        if wandb is not None:
+            wandb.finish()
 
 
 class DummyLogger:
@@ -196,7 +201,7 @@ class DummyLogger:
 
         self.data = []
 
-    def log(self, metrics: dict[str, Any]):
+    def log(self, metrics: Dict[str, Any]):
         self.data.append(metrics)
 
     def finish(self):

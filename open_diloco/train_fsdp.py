@@ -11,16 +11,30 @@ import os
 import time
 from contextlib import nullcontext
 import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Optional, List, Dict
 
-from pydantic import model_validator
 import torch
-from pydantic_config import parse_argv, BaseConfig
-from datasets import load_dataset
-from datasets.distributed import split_dataset_by_node
+try:
+    from pydantic import model_validator  # type: ignore
+    from pydantic_config import parse_argv, BaseConfig  # type: ignore
+    _HAS_PYDANTIC_CONFIG = True
+except Exception:
+    import argparse
+    _HAS_PYDANTIC_CONFIG = False
+
+    def _bool_flag(parser: argparse.ArgumentParser, name: str, default: bool, help_msg: str):
+        group = parser.add_mutually_exclusive_group(required=False)
+        group.add_argument(f"--{name}", dest=name.replace('-', '_'), action="store_true", help=help_msg)
+        group.add_argument(f"--no-{name}", dest=name.replace('-', '_'), action="store_false", help=f"Disable {help_msg}")
+        parser.set_defaults(**{name.replace('-', '_'): default})
 from torch.distributed import destroy_process_group, init_process_group
 
-from torchdata.stateful_dataloader import StatefulDataLoader
+# Optional import: torchdata (only needed for non-fake data). Fallback to standard DataLoader
+try:
+    from torchdata.stateful_dataloader import StatefulDataLoader  # type: ignore
+except Exception:  # torchdata not installed
+    from torch.utils.data import DataLoader as StatefulDataLoader  # type: ignore
+
 from transformers import (
     AutoTokenizer,
     DataCollatorForLanguageModeling,
@@ -45,11 +59,23 @@ from open_diloco.ckpt_utils import (
     load_checkpoint,
     save_checkpoint,
 )
-from open_diloco.hivemind_diloco import AllReduceStrategy, DiLoCoOptimizer
+# Lazy import hivemind components only when needed to avoid hard dependency
+try:
+    from open_diloco.hivemind_diloco import AllReduceStrategy, DiLoCoOptimizer  # type: ignore
+except Exception:
+    AllReduceStrategy = None  # type: ignore
+    DiLoCoOptimizer = None  # type: ignore
 from open_diloco.utils import WandbLogger, DummyLogger
 
-from hivemind.dht.dht import DHT
-from hivemind.utils.networking import log_visible_maddrs
+try:
+    from hivemind.dht.dht import DHT  # type: ignore
+except Exception:
+    DHT = None  # type: ignore
+try:
+    from hivemind.utils.networking import log_visible_maddrs  # type: ignore
+except Exception:
+    def log_visible_maddrs(*args, **kwargs):  # type: ignore
+        return None
 from hivemind.optim.optimizer import logger
 
 
@@ -68,32 +94,34 @@ TEST_VOCAB_SIZE = 1024
 
 # Function to initialize the distributed process group
 def ddp_setup():
-    init_process_group(backend="nccl", timeout=datetime.timedelta(minutes=TIMEOUT_NCCL_MINUTES))
-    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    init_process_group(backend=backend, timeout=datetime.timedelta(minutes=TIMEOUT_NCCL_MINUTES))
+    if torch.cuda.is_available():
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
 
 def log(message):
     logger.info(f"[rank {os.environ['LOCAL_RANK']}] {message}")
 
 
-class HvConfig(BaseConfig):
+class HvConfig(BaseConfig if _HAS_PYDANTIC_CONFIG else object):
     outer_lr: float = 0.7
     local_steps: int = 500
-    initial_peers: list[str] | None = None
-    host_maddrs: list[str] = ["/ip4/0.0.0.0/tcp/0"]
-    announce_maddrs: list[str] | None = None
-    matchmaking_time: float | None = None
-    averaging_timeout: float | None = None
-    hivemind_compression: Literal["fp16", "scaled-fp16", "uniform8bit", "quantile8bit", "blockwise8bit"] | None = None
-    all_reduce_strategy: AllReduceStrategy = AllReduceStrategy.WAIT_FOR_ALL
-    timeout_waiting_for_peers: float | None = None
+    initial_peers: Optional[List[str]] = None
+    host_maddrs: List[str] = ["/ip4/0.0.0.0/tcp/0"]
+    announce_maddrs: Optional[List[str]] = None
+    matchmaking_time: Optional[float] = None
+    averaging_timeout: Optional[float] = None
+    hivemind_compression: Optional[Literal["fp16", "scaled-fp16", "uniform8bit", "quantile8bit", "blockwise8bit"]] = None
+    all_reduce_strategy: Any = AllReduceStrategy.WAIT_FOR_ALL if AllReduceStrategy is not None else None
+    timeout_waiting_for_peers: Optional[float] = None
     skip_load_from_peers: bool = False
     world_rank: int
     galaxy_size: int
     fail_rank_drop: bool = False  # fail if we lose a diloco worker
 
     @model_validator(mode="before")
-    def cast_str_to_list(cls, values: dict[str, Any]) -> dict[str, Any]:
+    def cast_str_to_list(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         """This allow to only pass a string and it will still be cast as a list"""
         for arg_name in ["initial_peers", "host_maddrs", "announce_maddrs"]:
             if arg_name in values.keys() and isinstance(values[arg_name], str):
@@ -101,7 +129,7 @@ class HvConfig(BaseConfig):
         return values
 
 
-class Config(BaseConfig):
+class Config(BaseConfig if _HAS_PYDANTIC_CONFIG else object):
     path_model: str = "PrimeIntellect/llama-150m-fresh"
     torch_compile: bool = True
     attn_implementation: str = "sdpa"
@@ -121,18 +149,22 @@ class Config(BaseConfig):
     # Checkpointing and logging
     project: str = "hivemind_debug"
     metric_logger_type: Literal["wandb", "dummy"] = "wandb"
-    log_activations_steps: int | None = None
+    log_activations_steps: Optional[int] = None
     ckpt: CkptConfig = CkptConfig()
     # Hivemind
-    hv: HvConfig | None = None  # if no hv config then hivemind is disabled
+    hv: Optional[HvConfig] = None  # if no hv config then hivemind is disabled
     fake_data: bool = False
-    max_steps: int | None = None
+    max_steps: Optional[int] = None
 
 
 def get_dataloader(tokenizer, world_size, rank, local_rank, config: Config) -> StatefulDataLoader:
     if config.fake_data:
         train_dataset = FakeTokenizedDataset(config.seq_length, TEST_VOCAB_SIZE)
     else:
+        # Lazy import heavy deps only if needed
+        from datasets import load_dataset  # type: ignore
+        from datasets.distributed import split_dataset_by_node  # type: ignore
+
         ds = load_dataset(config.dataset_name_or_path, "en", streaming=True)
 
         def tokenize_function(data):
@@ -197,12 +229,17 @@ def train(config: Config):
 
     if rank == 0:
         logger_cls = WandbLogger if config.metric_logger_type == "wandb" else DummyLogger
-        metric_logger = logger_cls(project=config.project, config=config.model_dump(), resume=resume_from_ckpt)
+        cfg_payload = config.model_dump() if hasattr(config, "model_dump") else vars(config)
+        metric_logger = logger_cls(project=config.project, config=cfg_payload, resume=resume_from_ckpt)
 
     if config.hv is not None:
+        if AllReduceStrategy is None or DiLoCoOptimizer is None:
+            raise RuntimeError("Hivemind is not installed but hv config is provided. Install hivemind or run without hv.")
         log("hivemind diloco enabled")
 
     if world_messenger_hv:
+        # safe import within block (ensures module load only if actually used)
+        from open_diloco.hivemind_diloco import AllReduceStrategy as _ARS, DiLoCoOptimizer as _DLO  # noqa: F401
         dht = DHT(
             start=True,
             initial_peers=config.hv.initial_peers,
@@ -215,10 +252,24 @@ def train(config: Config):
         check_checkpoint_path_access(config.ckpt.path, rank, config.hv.world_rank if config.hv else None)
 
     # DataLoader preparation
-    tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-v0.1", use_fast=True)
-    tokenizer.pad_token = "</s>"  # Ensure pad token is set for models that need it
+    if config.fake_data:
+        # Avoid external downloads for tokenizer when using fake data
+        def _collate_fake(batch):
+            input_ids = torch.stack([torch.tensor(sample["input_ids"], dtype=torch.long) for sample in batch])
+            attention_mask = torch.stack([torch.tensor(sample["attention_mask"], dtype=torch.long) for sample in batch])
+            return {"input_ids": input_ids, "attention_mask": attention_mask}
 
-    train_dataloader = get_dataloader(tokenizer, world_size, rank, local_rank, config)
+        train_dataset = FakeTokenizedDataset(config.seq_length, TEST_VOCAB_SIZE)
+        train_dataloader = StatefulDataLoader(
+            train_dataset,
+            collate_fn=_collate_fake,
+            batch_size=config.per_device_train_batch_size,
+            num_workers=config.num_workers,
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-v0.1", use_fast=True)
+        tokenizer.pad_token = "</s>"  # Ensure pad token is set for models that need it
+        train_dataloader = get_dataloader(tokenizer, world_size, rank, local_rank, config)
 
     model = get_model(config)
     model = model.to(local_rank)
@@ -237,12 +288,12 @@ def train(config: Config):
     else:
         device_mesh = None
     model = FSDP(
-        model,
-        sharding_strategy=sharding_strategy,
-        mixed_precision=MixedPrecision(param_dtype=half_precision_dtype) if half_precision else None,
-        use_orig_params=config.torch_compile,
-        device_mesh=device_mesh,
-    )
+            model,
+            sharding_strategy=sharding_strategy,
+            mixed_precision=MixedPrecision(param_dtype=half_precision_dtype) if half_precision else None,
+            use_orig_params=config.torch_compile,
+            device_mesh=device_mesh,
+        )
     if config.torch_compile:
         model = torch.compile(model)
 
@@ -376,7 +427,16 @@ def train(config: Config):
 
         with model.no_sync() if is_accumulating else nullcontext():
             outputs = model(**batch)
-            loss = outputs.loss / gradient_accumulation_steps
+            # Handle case where model doesn't return loss directly
+            if hasattr(outputs, 'loss') and outputs.loss is not None:
+                loss = outputs.loss / gradient_accumulation_steps
+            else:
+                # Calculate loss manually for language modeling
+                logits = outputs.logits
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = batch['input_ids'][..., 1:].contiguous()
+                loss_fct = torch.nn.CrossEntropyLoss()
+                loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)) / gradient_accumulation_steps
 
             loss_batch += loss.detach()
 
@@ -522,6 +582,55 @@ if __name__ == "__main__":
     torch._dynamo.config.suppress_errors = "PRIME_INTELLECT_DEV" not in os.environ
     torch.set_float32_matmul_precision("high")
     ddp_setup()
-    config = Config(**parse_argv())
+    if _HAS_PYDANTIC_CONFIG:
+        config = Config(**parse_argv())
+    else:
+        # minimal argparse fallback covering flags we use in our run
+        import argparse as _argparse
+        _p = _argparse.ArgumentParser()
+        _p.add_argument("--path-model", dest="path_model", default="PrimeIntellect/llama-150m-fresh")
+        _p.add_argument("--per-device-train-batch-size", type=int, dest="per_device_train_batch_size", default=32)
+        _p.add_argument("--total-batch-size", type=int, dest="total_batch_size", default=512)
+        _p.add_argument("--lr", type=float, dest="lr", default=4e-4)
+        _p.add_argument("--seq-length", type=int, dest="seq_length", default=1024)
+        _p.add_argument("--project", dest="project", default="hivemind_debug")
+        _p.add_argument("--precision", dest="precision", default="fp16-mixed")
+        _p.add_argument("--sharding-strategy", dest="sharding_strategy", default="NO_SHARD")
+        _p.add_argument("--num-workers", type=int, dest="num_workers", default=4)
+        _p.add_argument("--total-steps", type=int, dest="total_steps", default=88_000)
+        _p.add_argument("--warmup-steps", type=int, dest="warmup_steps", default=1000)
+        _p.add_argument("--log-activations-steps", type=int, dest="log_activations_steps", default=None)
+        _p.add_argument("--max-steps", type=int, dest="max_steps", default=None)
+        _bool_flag(_p, "torch-compile", default=True, help_msg="torch compile")
+        _bool_flag(_p, "fake-data", default=False, help_msg="use fake data")
+        _p.add_argument("--metric-logger-type", dest="metric_logger_type", default="wandb")
+        _p.add_argument("--ckpt.interval", dest="ckpt_interval", type=int, default=None)
+        _p.add_argument("--ckpt.path", dest="ckpt_path", default="outputs")
+        args = _p.parse_args()
+
+        class _C(Config):
+            pass
+
+        cfg = _C()
+        cfg.path_model = args.path_model
+        cfg.per_device_train_batch_size = args.per_device_train_batch_size
+        cfg.total_batch_size = args.total_batch_size
+        cfg.lr = args.lr
+        cfg.seq_length = args.seq_length
+        cfg.project = args.project
+        cfg.precision = args.precision
+        cfg.sharding_strategy = args.sharding_strategy
+        cfg.num_workers = args.num_workers
+        cfg.total_steps = args.total_steps
+        cfg.warmup_steps = args.warmup_steps
+        cfg.log_activations_steps = args.log_activations_steps
+        cfg.max_steps = args.max_steps
+        cfg.torch_compile = args.torch_compile
+        cfg.fake_data = args.fake_data
+        cfg.metric_logger_type = args.metric_logger_type
+        cfg.ckpt.interval = args.ckpt_interval
+        cfg.ckpt.path = args.ckpt_path
+        config = cfg
+
     train(config)
     destroy_process_group()

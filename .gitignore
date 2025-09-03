@@ -21,6 +21,8 @@ __pycache__/
 # Distribution / packaging
 .Python
 env/
+.env-open-diloco/
+.venv/
 bin/
 build/
 develop-eggs/

@@ -1,26 +1,56 @@
 import fsspec
-from pydantic_config import BaseConfig
+import os
 import torch
+from typing import Optional, Tuple, List
 from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict
 import torch.distributed.checkpoint as dcp
-import os
-from torchdata.stateful_dataloader import StatefulDataLoader
 from fsspec.generic import GenericFileSystem
-from hivemind.optim.optimizer import logger
+
+# Optional imports and fallbacks to run without hivemind/pydantic_config/torchdata
+try:
+    from pydantic_config import BaseConfig  # type: ignore
+    _HAS_PYDANTIC_CONFIG = True
+except Exception:
+    _HAS_PYDANTIC_CONFIG = False
+    class BaseConfig(object):
+        pass
+
+try:
+    from torchdata.stateful_dataloader import StatefulDataLoader  # type: ignore
+except Exception:
+    from torch.utils.data import DataLoader as StatefulDataLoader  # type: ignore
+
+try:
+    from hivemind.optim.optimizer import logger  # type: ignore
+except Exception:
+    class _Logger:
+        @staticmethod
+        def info(msg: str):
+            print(msg)
+
+    logger = _Logger()
 
 
 GLOBAL_STATE_FILE = "global_state_dict.pt"
 CKPT_PREFIX = "model_step"
 
+if _HAS_PYDANTIC_CONFIG:
+    class CkptConfig(BaseConfig):
+        # Use strings to avoid evaluation under Python 3.8
+        resume: "str | bool | None" = None  # type: ignore[valid-type]
+        interval: "int | None" = None  # type: ignore[valid-type]
+        path: str = "outputs"
+        topk: "int | None" = None  # type: ignore[valid-type]
+else:
+    class CkptConfig(BaseConfig):
+        def __init__(self):
+            self.resume = None  # type: ignore
+            self.interval = None
+            self.path = "outputs"
+            self.topk = None
 
-class CkptConfig(BaseConfig):
-    resume: str | bool | None = None  # if resume is a boolean, it means we should resume from the last checkpoint
-    interval: int | None = None
-    path: str = "outputs"
-    topk: int | None = None  # how many checkpoints to keep
 
-
-def get_resume_info(ckpt_config: CkptConfig) -> tuple[bool, str | None]:
+def get_resume_info(ckpt_config: CkptConfig) -> Tuple[bool, Optional[str]]:
     """
     check if we should resume from a checkpoint, if yes return the path to the checkpoint, otherwise return None
     """
@@ -50,10 +80,10 @@ def save_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LambdaLR,
-    outer_optimizer: torch.optim.Optimizer | None = None,
-    scaler: torch.cuda.amp.GradScaler | None = None,
-    loss: float | None = None,
-    data_loader: StatefulDataLoader | None = None,
+    outer_optimizer: Optional[torch.optim.Optimizer] = None,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    loss: Optional[float] = None,
+    data_loader: Optional[StatefulDataLoader] = None,
     save_global_state: bool = True,
 ):
     """Save the model and optimizer state to a checkpoint folderx
@@ -104,10 +134,10 @@ def load_checkpoint(
     checkpoint_path: str,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LambdaLR | None = None,
-    outer_optimizer: torch.optim.Optimizer | None = None,
-    scaler: torch.cuda.amp.GradScaler | None = None,
-    data_loader: StatefulDataLoader | None = None,
+    scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
+    outer_optimizer: Optional[torch.optim.Optimizer] = None,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    data_loader: Optional[StatefulDataLoader] = None,
 ) -> float:
     """Load the model and optimizer state from a checkpoint folder
 
@@ -167,7 +197,7 @@ def filter_ckpt_files(f):
             return False
 
 
-def delete_old_checkpoints(checkpoint_path: str, topk: int) -> list[str]:
+def delete_old_checkpoints(checkpoint_path: str, topk: int) -> List[str]:
     fs = GenericFileSystem()
     ckpt_files = [f for f in fs.ls(checkpoint_path, detail=False) if filter_ckpt_files(f)]
     ckpt_files.sort(key=lambda x: int(x.split("_")[-1]))
@@ -179,7 +209,7 @@ def delete_old_checkpoints(checkpoint_path: str, topk: int) -> list[str]:
     return ckpt_deleted
 
 
-def check_checkpoint_path_access(checkpoint_path: str, rank: int, world_rank_hv: int | None = None):
+def check_checkpoint_path_access(checkpoint_path: str, rank: int, world_rank_hv: Optional[int] = None):
     if world_rank_hv:
         dummy_file_path = os.path.join(
             checkpoint_path, get_diloco_rank_dir_name(world_rank_hv), f"dummy_file_{rank}.txt"
