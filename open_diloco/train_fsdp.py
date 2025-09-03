@@ -606,6 +606,12 @@ if __name__ == "__main__":
         _p.add_argument("--metric-logger-type", dest="metric_logger_type", default="wandb")
         _p.add_argument("--ckpt.interval", dest="ckpt_interval", type=int, default=None)
         _p.add_argument("--ckpt.path", dest="ckpt_path", default="outputs")
+        # Hivemind arguments
+        _p.add_argument("--hv.world-rank", dest="hv_world_rank", type=int, default=None)
+        _p.add_argument("--hv.galaxy-size", dest="hv_galaxy_size", type=int, default=None)
+        _p.add_argument("--hv.local-steps", dest="hv_local_steps", type=int, default=500)
+        _p.add_argument("--hv.outer-lr", dest="hv_outer_lr", type=float, default=0.7)
+        _p.add_argument("--hv.initial-peers", dest="hv_initial_peers", type=str, default=None)
         args = _p.parse_args()
 
         class _C(Config):
@@ -630,6 +636,17 @@ if __name__ == "__main__":
         cfg.metric_logger_type = args.metric_logger_type
         cfg.ckpt.interval = args.ckpt_interval
         cfg.ckpt.path = args.ckpt_path
+        
+        # Set Hivemind config if provided
+        if args.hv_world_rank is not None:
+            from open_diloco.train_fsdp import HvConfig
+            cfg.hv = HvConfig()
+            cfg.hv.world_rank = args.hv_world_rank
+            cfg.hv.galaxy_size = args.hv_galaxy_size or 1
+            cfg.hv.local_steps = args.hv_local_steps
+            cfg.hv.outer_lr = args.hv_outer_lr
+            if args.hv_initial_peers:
+                cfg.hv.initial_peers = [args.hv_initial_peers]
         config = cfg
 
     train(config)

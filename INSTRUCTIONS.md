@@ -153,10 +153,126 @@ pkill -f train_fsdp
 3. **Adjust batch size** based on GPU memory availability
 4. **Use appropriate sharding strategy** for your model size
 
+## Hivemind Multi-Cluster Training
+
+Hivemind enables decentralized multi-cluster training with automatic peer discovery and weight averaging.
+
+### 1. Start the DHT (Distributed Hash Table)
+
+First, start a DHT instance that will coordinate the distributed training:
+
+```bash
+# Navigate to the project directory
+cd /path/to/Distributed-Multicluster
+
+# Start DHT in background
+PATH="/path/to/Distributed-Multicluster/.env-open-diloco/bin:$PATH" hivemind-dht \
+    --identity_path fixed_private_key.pem \
+    --host_maddrs /ip4/0.0.0.0/tcp/30001 &
+
+# Wait a moment for DHT to start, then check the peer address
+sleep 3
+# The DHT will output something like:
+# --initial_peers /ip4/127.0.0.1/tcp/30001/p2p/Qmd5gRA2PYYQB8gZNBau6APQTCGqEGsCggmpxay66h4sUJ
+```
+
+### 2. Basic Hivemind Training
+
+```bash
+# Set environment variables
+export PYTHONPATH=/path/to/Distributed-Multicluster
+export WANDB_MODE=disabled
+
+# Run Hivemind training (replace PEER_ADDRESS with the actual address from DHT output)
+CUDA_VISIBLE_DEVICES=6,7 torchrun --standalone --nproc_per_node=2 train_fsdp.py \
+    --per-device-train-batch-size 4 \
+    --total-batch-size 16 \
+    --lr 1e-2 \
+    --path-model ../tests/models/llama-2m-fresh \
+    --metric-logger-type dummy \
+    --no-torch-compile \
+    --fake-data \
+    --max-steps 5 \
+    --hv.initial-peers /ip4/127.0.0.1/tcp/30001/p2p/Qmd5gRA2PYYQB8gZNBau6APQTCGqEGsCggmpxay66h4sUJ \
+    --hv.galaxy-size 1 \
+    --hv.world-rank 0 \
+    --hv.local-steps 2
+```
+
+### 3. Multi-Machine Hivemind Training
+
+For training across multiple machines, set up the DHT on one machine and run training on others:
+
+**On Machine 1 (DHT Coordinator):**
+```bash
+# Start DHT
+hivemind-dht --identity_path fixed_private_key.pem --host_maddrs /ip4/0.0.0.0/tcp/30001
+
+# Note the peer address from output
+```
+
+**On Machine 2 (Worker 1):**
+```bash
+export PEER_ADDRESS=/ip4/MACHINE1_IP/tcp/30001/p2p/PEER_ID
+export WORLD_RANK=0
+
+CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 train_fsdp.py \
+    --per-device-train-batch-size 4 \
+    --total-batch-size 16 \
+    --lr 1e-2 \
+    --path-model ../tests/models/llama-2m-fresh \
+    --metric-logger-type dummy \
+    --no-torch-compile \
+    --fake-data \
+    --max-steps 5 \
+    --hv.initial-peers $PEER_ADDRESS \
+    --hv.galaxy-size 2 \
+    --hv.world-rank $WORLD_RANK \
+    --hv.local-steps 2
+```
+
+**On Machine 3 (Worker 2):**
+```bash
+export PEER_ADDRESS=/ip4/MACHINE1_IP/tcp/30001/p2p/PEER_ID
+export WORLD_RANK=1
+
+CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 train_fsdp.py \
+    --per-device-train-batch-size 4 \
+    --total-batch-size 16 \
+    --lr 1e-2 \
+    --path-model ../tests/models/llama-2m-fresh \
+    --metric-logger-type dummy \
+    --no-torch-compile \
+    --fake-data \
+    --max-steps 5 \
+    --hv.initial-peers $PEER_ADDRESS \
+    --hv.galaxy-size 2 \
+    --hv.world-rank $WORLD_RANK \
+    --hv.local-steps 2
+```
+
+### 4. Hivemind-Specific Parameters
+
+- `--hv.initial-peers`: DHT peer address for initial connection
+- `--hv.galaxy-size`: Total number of workers across all machines
+- `--hv.world-rank`: Unique rank for this worker (0, 1, 2, ...)
+- `--hv.local-steps`: Number of local training steps before averaging
+- `--hv.outer-lr`: Learning rate for the outer optimizer (default: 0.7)
+
+### 5. Stopping Hivemind Training
+
+```bash
+# Stop training processes
+pkill -f torchrun
+
+# Stop DHT
+pkill -f hivemind-dht
+```
+
 ## Next Steps
 
-After mastering torch.distributed, explore:
-- Hivemind multi-cluster training
+After mastering both torch.distributed and Hivemind, explore:
 - Real dataset training
 - Model checkpointing and resuming
 - Advanced FSDP configurations
+- Production multi-cluster deployments

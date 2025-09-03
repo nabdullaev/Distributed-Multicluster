@@ -338,7 +338,7 @@ class DiLoCoOptimizer(Optimizer):
         grad_compression: CompressionBase = NoCompression(),
         tracker_opts: Optional[dict] = None,
         all_reduce_strategy: AllReduceStrategy = AllReduceStrategy.WAIT_FOR_ALL,
-        timeout_waiting_for_peers: float | None = None,
+        timeout_waiting_for_peers: Optional[float] = None,
         matchmaking_time: Optional[float] = 15.0,
         **kwargs,
     ):
