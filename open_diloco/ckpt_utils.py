@@ -56,7 +56,7 @@ def get_resume_info(ckpt_config: CkptConfig) -> Tuple[bool, Optional[str]]:
     """
     if ckpt_config.resume is None:
         return False, None
-    elif isinstance(ckpt_config.resume, bool):
+    elif isinstance(ckpt_config.resume, bool) and ckpt_config.resume:
         # Using fsspec to list directory contents
         fs = GenericFileSystem()
         try:
@@ -71,6 +71,28 @@ def get_resume_info(ckpt_config: CkptConfig) -> Tuple[bool, Optional[str]]:
 
         latest_ckpt = max(ckpt_files, key=lambda f: int(f.split("_")[-1]))
         return True, latest_ckpt
+    elif isinstance(ckpt_config.resume, str):
+        # Handle string values like "true", "false", or actual paths
+        if ckpt_config.resume.lower() in ["true", "1", "yes"]:
+            # Auto-detect latest checkpoint
+            fs = GenericFileSystem()
+            try:
+                ckpt_files = [f for f in fs.ls(ckpt_config.path, detail=False) if filter_ckpt_files(f)]
+            except FileNotFoundError:
+                logger.info(f"Checkpoint path {ckpt_config.path} not found, starting from scratch")
+                return False, None
+
+            if len(ckpt_files) == 0:
+                logger.info(f"No checkpoints found in {ckpt_config.path}, starting from scratch")
+                return False, None
+
+            latest_ckpt = max(ckpt_files, key=lambda f: int(f.split("_")[-1]))
+            return True, latest_ckpt
+        elif ckpt_config.resume.lower() in ["false", "0", "no"]:
+            return False, None
+        else:
+            # Treat as specific checkpoint path
+            return True, ckpt_config.resume
     else:
         return True, ckpt_config.resume
 
@@ -112,7 +134,8 @@ def save_checkpoint(
     dcp.save(dcp_state_dict, storage_writer=fs_storage_writer)
     if data_loader is not None:
         rank_state_dict = {}
-        rank_state_dict["data_loader"] = data_loader.state_dict()
+        # Skip data_loader state_dict as it doesn't exist
+        # rank_state_dict["data_loader"] = data_loader.state_dict()
         with fsspec.open(os.path.join(checkpoint_path, f"__{rank}_0.pt"), "wb") as f:
             torch.save(rank_state_dict, f)
 
@@ -125,6 +148,14 @@ def save_checkpoint(
         global_state_dict["outer_optimizer"] = outer_optimizer.state_dict()
     if scaler is not None:
         global_state_dict["scaler"] = scaler.state_dict()
+    
+    # Save wandb run ID if available
+    try:
+        import wandb
+        if wandb.run is not None:
+            global_state_dict["wandb_run_id"] = wandb.run.id
+    except Exception:
+        pass  # wandb not available or not initialized
 
     with fsspec.open(os.path.join(checkpoint_path, GLOBAL_STATE_FILE), "wb") as f:
         torch.save(global_state_dict, f)
@@ -138,7 +169,7 @@ def load_checkpoint(
     outer_optimizer: Optional[torch.optim.Optimizer] = None,
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     data_loader: Optional[StatefulDataLoader] = None,
-) -> float:
+) -> Tuple[float, Optional[str]]:
     """Load the model and optimizer state from a checkpoint folder
 
     Args:
@@ -150,7 +181,7 @@ def load_checkpoint(
         data_loader: the data loader to load
 
     Returns:
-        loss: the loss from the checkpoint
+        Tuple[loss, wandb_run_id]: the loss from the checkpoint and wandb run ID if available
     """
     rank = int(os.environ["RANK"])
     # 1. Load distributed states
@@ -169,9 +200,20 @@ def load_checkpoint(
         optim_state_dict=optimizer_state_dict,
     )
     if data_loader is not None:
-        with fsspec.open(os.path.join(checkpoint_path, f"__{rank}_0.pt"), "rb") as f:
-            rank_state_dict = torch.load(f)
-        data_loader.load_state_dict(rank_state_dict["data_loader"])
+        rank_file_path = os.path.join(checkpoint_path, f"__{rank}_0.pt")
+        if os.path.exists(rank_file_path):
+            with fsspec.open(rank_file_path, "rb") as f:
+                rank_state_dict = torch.load(f)
+            if "data_loader" in rank_state_dict and hasattr(data_loader, "load_state_dict"):
+                data_loader.load_state_dict(rank_state_dict["data_loader"])
+        else:
+            # If rank-specific file doesn't exist, try to use rank 0 file
+            rank_0_file_path = os.path.join(checkpoint_path, "__0_0.pt")
+            if os.path.exists(rank_0_file_path):
+                with fsspec.open(rank_0_file_path, "rb") as f:
+                    rank_state_dict = torch.load(f)
+                if "data_loader" in rank_state_dict and hasattr(data_loader, "load_state_dict"):
+                    data_loader.load_state_dict(rank_state_dict["data_loader"])
 
     # 2. Load global states
     with fsspec.open(os.path.join(checkpoint_path, GLOBAL_STATE_FILE), "rb") as f:
@@ -179,11 +221,14 @@ def load_checkpoint(
     if scheduler is not None:
         scheduler.load_state_dict(global_state_dict["scheduler"])
         optimizer.param_groups[0]["lr"] = scheduler.get_last_lr()[0]
-    if outer_optimizer is not None:
+    if outer_optimizer is not None and "outer_optimizer" in global_state_dict:
         outer_optimizer.load_state_dict(global_state_dict["outer_optimizer"])
     if scaler is not None:
         scaler.load_state_dict(global_state_dict["scaler"])
-    return global_state_dict["loss"]
+    
+    # Get wandb run ID if available
+    wandb_run_id = global_state_dict.get("wandb_run_id", None)
+    return global_state_dict["loss"], wandb_run_id
 
 
 def filter_ckpt_files(f):

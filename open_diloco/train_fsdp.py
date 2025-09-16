@@ -227,10 +227,16 @@ def train(config: Config):
 
     resume_from_ckpt, resume_path = get_resume_info(config.ckpt)
 
+    # Get wandb run ID from checkpoint if resuming
+    wandb_run_id = None
+    if resume_from_ckpt:
+        # We'll get the wandb run ID after loading the checkpoint
+        pass
+    
     if rank == 0:
         logger_cls = WandbLogger if config.metric_logger_type == "wandb" else DummyLogger
         cfg_payload = config.model_dump() if hasattr(config, "model_dump") else vars(config)
-        metric_logger = logger_cls(project=config.project, config=cfg_payload, resume=resume_from_ckpt)
+        metric_logger = logger_cls(project=config.project, config=cfg_payload, resume=resume_from_ckpt, run_id=wandb_run_id)
 
     if config.hv is not None:
         if AllReduceStrategy is None or DiLoCoOptimizer is None:
@@ -317,7 +323,7 @@ def train(config: Config):
             # We also need to do this on follower workers so that the world_messenger has friends to talk to when it does its two loads
             # Otherwise the world messenger will get lonely and hang
             fake_optimizer = inner_optimizer(model.parameters())
-            last_loss = load_checkpoint(
+            last_loss, _ = load_checkpoint(
                 checkpoint_path=os.path.join(resume_path, get_diloco_rank_dir_name(config.hv.world_rank)),
                 model=model,
                 optimizer=fake_optimizer,
@@ -362,7 +368,7 @@ def train(config: Config):
         )  # scheduler(optimizer) should work but better to make it explicit here
 
         if resume_from_ckpt:
-            last_loss = load_checkpoint(
+            last_loss, wandb_run_id = load_checkpoint(
                 checkpoint_path=ckpt_path,
                 model=model,
                 optimizer=optimizer.inner_optimizer,
@@ -379,7 +385,7 @@ def train(config: Config):
         optimizer = inner_optimizer(model.parameters())
         scheduler = scheduler_fn(optimizer)
         if resume_from_ckpt:
-            last_loss = load_checkpoint(
+            last_loss, wandb_run_id = load_checkpoint(
                 checkpoint_path=ckpt_path,
                 model=model,
                 optimizer=optimizer,
@@ -606,6 +612,7 @@ if __name__ == "__main__":
         _p.add_argument("--metric-logger-type", dest="metric_logger_type", default="wandb")
         _p.add_argument("--ckpt.interval", dest="ckpt_interval", type=int, default=None)
         _p.add_argument("--ckpt.path", dest="ckpt_path", default="outputs")
+        _p.add_argument("--ckpt.resume", dest="ckpt_resume", type=str, default=None)
         # Hivemind arguments
         _p.add_argument("--hv.world-rank", dest="hv_world_rank", type=int, default=None)
         _p.add_argument("--hv.galaxy-size", dest="hv_galaxy_size", type=int, default=None)
@@ -636,6 +643,7 @@ if __name__ == "__main__":
         cfg.metric_logger_type = args.metric_logger_type
         cfg.ckpt.interval = args.ckpt_interval
         cfg.ckpt.path = args.ckpt_path
+        cfg.ckpt.resume = args.ckpt_resume
         
         # Set Hivemind config if provided
         if args.hv_world_rank is not None:

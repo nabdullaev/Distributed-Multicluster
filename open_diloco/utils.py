@@ -1,7 +1,7 @@
 import hashlib
 from functools import partial
 import pickle
-from typing import Any, Generator, Protocol, Dict, Tuple, Union, List
+from typing import Any, Generator, Protocol, Dict, Tuple, Union, List, Optional
 
 import torch
 from torch.utils.hooks import RemovableHandle
@@ -179,10 +179,28 @@ class Logger(Protocol):
 
 
 class WandbLogger:
-    def __init__(self, project, config, resume: bool):
+    def __init__(self, project, config, resume: bool, run_id: Optional[str] = None):
         if wandb is None:
             raise RuntimeError("wandb is not available in the current environment")
-        wandb.init(project=project, config=config, resume="auto" if resume else None)
+        
+        # If resuming and we have a run_id, try to continue the same run
+        if resume and run_id:
+            try:
+                wandb.init(project=project, config=config, resume="must", id=run_id)
+            except Exception as e:
+                print(f"Failed to resume wandb run {run_id}: {e}")
+                print("Creating a new wandb run instead")
+                wandb.init(project=project, config=config)
+        elif resume:
+            # Try to resume automatically, but this might create a new run
+            try:
+                wandb.init(project=project, config=config, resume="auto")
+            except Exception as e:
+                print(f"Failed to auto-resume wandb: {e}")
+                print("Creating a new wandb run instead")
+                wandb.init(project=project, config=config)
+        else:
+            wandb.init(project=project, config=config)
 
     def log(self, metrics: Dict[str, Any]):
         if wandb is not None:
