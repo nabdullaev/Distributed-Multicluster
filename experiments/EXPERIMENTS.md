@@ -2,6 +2,7 @@
 
 ## Prerequisites
 
+### Option 1: Use existing environment
 ```bash
 # Activate environment
 source /home/nabdullaev/Distributed-Multicluster/.env-open-diloco/bin/activate
@@ -10,6 +11,22 @@ source /home/nabdullaev/Distributed-Multicluster/.env-open-diloco/bin/activate
 export PYTHONPATH=/home/nabdullaev/Distributed-Multicluster
 export WANDB_MODE=online  # Changed to online for proper wandb logging
 ```
+
+### Option 2: Create new environment
+```bash
+# Install dependencies (creates .env-experiments)
+cd experiments
+./install_dependencies.sh
+
+# Activate new environment
+source .env-experiments/bin/activate
+
+# Set environment
+export PYTHONPATH=/home/nabdullaev/Distributed-Multicluster
+export WANDB_MODE=online
+```
+
+**Note**: The `requirements.txt` in this folder contains exact working versions tested with all experiments.
 
 ## Experiment 1: DDP Baseline
 
