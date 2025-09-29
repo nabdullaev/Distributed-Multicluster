@@ -86,6 +86,8 @@ from open_diloco.utils import (
     register_metrics_hooks,
 )
 
+from nirvana_utils import copy_snapshot_to_out, copy_out_to_snapshot
+
 
 TIMEOUT_NCCL_MINUTES = os.environ.get("TIMEOUT_NCCL_MINUTES", 120)
 TARGET_LAYER_ACTIVATIONS = ["self_attn", "lm_head"]
@@ -564,6 +566,9 @@ def train(config: Config):
                         data_loader=train_dataloader,
                         save_global_state=rank == 0,
                     )
+                
+                if args.use_nirvana:
+                    copy_out_to_snapshot("nirvana_checkpoints")
 
                 if local_rank == 0:
                     # only the rank 0 deletes the checkpoints
@@ -619,7 +624,12 @@ if __name__ == "__main__":
         _p.add_argument("--hv.local-steps", dest="hv_local_steps", type=int, default=500)
         _p.add_argument("--hv.outer-lr", dest="hv_outer_lr", type=float, default=0.7)
         _p.add_argument("--hv.initial-peers", dest="hv_initial_peers", type=str, default=None)
+        _p.add_argument("--use_nirvana", action="store_true", default=False)
         args = _p.parse_args()
+
+        if args.use_nirvana:
+            os.makedirs("nirvana_checkpoints", exist_ok=True)
+            copy_snapshot_to_out("nirvana_checkpoints")
 
         class _C(Config):
             pass

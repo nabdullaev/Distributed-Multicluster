@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader
 
 from open_diloco.utils import FakeTokenizedDataset, WandbLogger, DummyLogger
 
+from nirvana_utils import copy_snapshot_to_out, copy_out_to_snapshot
+
 
 # Function to initialize the distributed process group
 def ddp_setup():
@@ -217,6 +219,9 @@ def main(
                 if real_step >= steps_limit:
                     print(f"Reached step limit ({steps_limit}), stopping training.")
                     break
+        
+        if args.use_nirvana and step % checkpoint_interval == 0:
+            copy_out_to_snapshot("nirvana_checkpoints")
 
     print("Training completed.")
     if local_rank == 0:
@@ -244,8 +249,13 @@ if __name__ == "__main__":
     parser.add_argument("--fake-data", action="store_true", default=True)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--metric-logger-type", type=str, default="dummy")
+    parser.add_argument("--use_nirvana", action="store_true", default=False)
     
     args = parser.parse_args()
+
+    if args.use_nirvana:
+        os.makedirs("nirvana_checkpoints", exist_ok=True)
+        copy_snapshot_to_out("nirvana_checkpoints")
     
     ddp_setup()
     main(**vars(args))
