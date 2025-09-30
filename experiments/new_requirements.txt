@@ -2,7 +2,7 @@
 # Generated from .env-open-diloco environment
 
 # Core ML libraries
-torch==2.3.1+cu121 --index-url https://download.pytorch.org/whl/cu121
+# torch==2.3.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 transformers==4.40.0
 datasets==3.1.0
 
