@@ -9,7 +9,8 @@ import torch.distributed as dist
 from torch.distributed import destroy_process_group, init_process_group
 from torch.utils.data import DataLoader
 
-from open_diloco.utils import FakeTokenizedDataset, WandbLogger, DummyLogger
+# from open_diloco.utils import FakeTokenizedDataset, WandbLogger, DummyLogger
+from utils import FakeTokenizedDataset, WandbLogger, DummyLogger
 
 from nirvana_utils import copy_snapshot_to_out, copy_out_to_snapshot
 
@@ -106,7 +107,8 @@ def main(
     if resume_from_checkpoint is not None:
         print(f"Resuming from checkpoint: {resume_from_checkpoint}")
         # Load checkpoint using the same utilities as train_fsdp.py
-        from open_diloco.ckpt_utils import load_checkpoint
+        # from open_diloco.ckpt_utils import load_checkpoint
+        from ckpt_utils import load_checkpoint
         last_loss, wandb_run_id = load_checkpoint(
             checkpoint_path=resume_from_checkpoint,
             model=model,
