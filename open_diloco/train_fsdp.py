@@ -79,7 +79,7 @@ except Exception:
 from hivemind.optim.optimizer import logger
 
 
-from open_diloco.utils import (
+from utils import (
     FakeTokenizedDataset,
     get_compression_kwargs,
     get_sharding_strategy,
@@ -247,7 +247,7 @@ def train(config: Config):
 
     if world_messenger_hv:
         # safe import within block (ensures module load only if actually used)
-        from open_diloco.hivemind_diloco import AllReduceStrategy as _ARS, DiLoCoOptimizer as _DLO  # noqa: F401
+        from hivemind_diloco import AllReduceStrategy as _ARS, DiLoCoOptimizer as _DLO  # noqa: F401
         dht = DHT(
             start=True,
             initial_peers=config.hv.initial_peers,
@@ -657,7 +657,7 @@ if __name__ == "__main__":
         
         # Set Hivemind config if provided
         if args.hv_world_rank is not None:
-            from open_diloco.train_fsdp import HvConfig
+            # from open_diloco.train_fsdp import HvConfig
             cfg.hv = HvConfig()
             cfg.hv.world_rank = args.hv_world_rank
             cfg.hv.galaxy_size = args.hv_galaxy_size or 1
