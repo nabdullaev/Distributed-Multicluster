@@ -49,7 +49,7 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.device_mesh import init_device_mesh
 
-from open_diloco.ckpt_utils import (
+from ckpt_utils import (
     CKPT_PREFIX,
     CkptConfig,
     check_checkpoint_path_access,
@@ -61,11 +61,11 @@ from open_diloco.ckpt_utils import (
 )
 # Lazy import hivemind components only when needed to avoid hard dependency
 try:
-    from open_diloco.hivemind_diloco import AllReduceStrategy, DiLoCoOptimizer  # type: ignore
+    from hivemind_diloco import AllReduceStrategy, DiLoCoOptimizer  # type: ignore
 except Exception:
     AllReduceStrategy = None  # type: ignore
     DiLoCoOptimizer = None  # type: ignore
-from open_diloco.utils import WandbLogger, DummyLogger
+from utils import WandbLogger, DummyLogger
 
 try:
     from hivemind.dht.dht import DHT  # type: ignore
