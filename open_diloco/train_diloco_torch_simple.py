@@ -251,7 +251,7 @@ if __name__ == "__main__":
     parser.add_argument("--fake-data", action="store_true", default=True)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--metric-logger-type", type=str, default="dummy")
-    parser.add_argument("--use_nirvana", action="store_true", default=False)
+    parser.add_argument("--use-nirvana", action="store_true", default=False)
     
     args = parser.parse_args()
 

@@ -624,7 +624,7 @@ if __name__ == "__main__":
         _p.add_argument("--hv.local-steps", dest="hv_local_steps", type=int, default=500)
         _p.add_argument("--hv.outer-lr", dest="hv_outer_lr", type=float, default=0.7)
         _p.add_argument("--hv.initial-peers", dest="hv_initial_peers", type=str, default=None)
-        _p.add_argument("--use_nirvana", action="store_true", default=False)
+        _p.add_argument("--use-nirvana", action="store_true", default=False)
         args = _p.parse_args()
 
         if args.use_nirvana:
