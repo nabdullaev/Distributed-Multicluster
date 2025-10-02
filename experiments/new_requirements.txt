@@ -2,7 +2,7 @@
 # Generated from .env-open-diloco environment
 
 # Core ML libraries
-torch==2.3.1
+# torch==2.3.1
 transformers==4.40.0
 datasets==3.1.0
 
@@ -33,7 +33,7 @@ pyyaml==6.0.2
 aiohttp==3.10.11
 grpcio==1.70.0
 grpcio-tools==1.70.0
-protobuf==5.29.5
+# protobuf==5.29.5
 
 # Crypto and networking (hivemind dependencies)
 cryptography==45.0.6
